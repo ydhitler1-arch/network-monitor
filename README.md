@@ -1,5 +1,7 @@
 # Network Monitor
 
+![Tests](https://github.com/ydhitler1-arch/network-monitor/actions/workflows/tests.yml/badge.svg)
+
 A local network monitoring dashboard: live bandwidth usage, connected device
 discovery, port scanning, and rule-based security alerts. Python (Flask)
 backend, React (Vite) frontend.
@@ -289,3 +291,7 @@ Other tunable constants live at the top of `backend/app.py` and
 - `MAX_PORTS_PER_SCAN` — cap on ports requested in a single scan
 - `HIGH_RISK_PORTS` — ports flagged as high-risk in alerts
 - `SPIKE_MULTIPLIER` / `SPIKE_MIN_RATE` — traffic spike sensitivity
+
+## License
+
+[MIT](LICENSE)
