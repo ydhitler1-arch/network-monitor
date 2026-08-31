@@ -6,6 +6,9 @@ node_modules/
 frontend/dist/
 data/*.db
 .env
+frontend/.env.local
+frontend/.env.production
+.vercel/
 bin/
 .pytest_cache/
 .run/
