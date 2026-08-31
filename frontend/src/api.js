@@ -1,4 +1,7 @@
-const BASE_URL = "/api";
+// In production (Vercel), set VITE_API_BASE_URL to your backend URL,
+// e.g. "http://192.168.1.x:5000/api" or "https://your-backend.example.com/api".
+// Leave unset for local dev — the Vite dev proxy handles /api → localhost:5000.
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 async function request(path, options) {
   const res = await fetch(`${BASE_URL}${path}`, { credentials: "include", ...options });
