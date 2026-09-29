@@ -3,15 +3,48 @@
 // Leave unset for local dev — the Vite dev proxy handles /api → localhost:5000.
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
+// ETag cache: maps request path → { etag, data } so 304 responses reuse
+// the previous body without re-parsing JSON or triggering a React re-render.
+const _etagCache = new Map();
+
 async function request(path, options) {
-  const res = await fetch(`${BASE_URL}${path}`, { credentials: "include", ...options });
+  const isGet = !options?.method || options.method === "GET";
+  const headers = { ...(options?.headers) };
+
+  // Attach the stored ETag as If-None-Match so the server can skip sending
+  // the body when the data hasn't changed since the last poll.
+  const cached = _etagCache.get(path);
+  if (isGet && cached?.etag) {
+    headers["If-None-Match"] = cached.etag;
+  }
+
+  const res = await fetch(`${BASE_URL}${path}`, {
+    credentials: "include",
+    ...options,
+    headers,
+  });
+
+  // 304 Not Modified — data hasn't changed, return cached value immediately.
+  if (res.status === 304 && cached) {
+    return cached.data;
+  }
+
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const err = new Error(body.error || `Request failed: ${res.status}`);
     err.status = res.status;
     throw err;
   }
-  return res.json();
+
+  const data = await res.json();
+
+  // Store ETag + parsed data for the next poll.
+  const etag = res.headers.get("ETag");
+  if (etag && isGet) {
+    _etagCache.set(path, { etag, data });
+  }
+
+  return data;
 }
 
 export const getTrafficCurrent = () => request("/traffic/current");

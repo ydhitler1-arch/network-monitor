@@ -9,12 +9,29 @@ DB_PATH = os.path.join(
 )
 _lock = threading.Lock()
 
+# Module-level persistent connection — avoids reopening the file on every query.
+# Protected by _lock; SQLite itself is not thread-safe without check_same_thread=False.
+_conn: sqlite3.Connection | None = None
 
-def get_connection():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+
+def get_connection() -> sqlite3.Connection:
+    """Return the shared persistent connection, creating it on first call."""
+    global _conn
+    if _conn is None:
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        _conn.row_factory = sqlite3.Row
+        # WAL mode: readers never block writers and writers never block readers.
+        # This is the single biggest SQLite performance win for concurrent access.
+        _conn.execute("PRAGMA journal_mode=WAL")
+        # Keep 64 MB of WAL in memory before flushing — reduces fsync calls.
+        _conn.execute("PRAGMA wal_autocheckpoint=1000")
+        # Synchronous=NORMAL is safe with WAL and much faster than FULL.
+        _conn.execute("PRAGMA synchronous=NORMAL")
+        # 8 MB page cache in memory.
+        _conn.execute("PRAGMA cache_size=-8000")
+        _conn.commit()
+    return _conn
 
 
 def init_db():
@@ -49,8 +66,14 @@ def init_db():
                 last_seen REAL
             )"""
         )
+        # Indexes make ORDER BY id DESC LIMIT n fast even on large tables.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_traffic_id ON traffic_history(id DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_id ON alerts(id DESC)"
+        )
         conn.commit()
-        conn.close()
 
 
 # Persisted every TRAFFIC_PERSIST_INTERVAL (5s, see app.py) — 17280 rows
@@ -78,7 +101,6 @@ def insert_traffic(sample):
             (TRAFFIC_HISTORY_RETENTION,),
         )
         conn.commit()
-        conn.close()
 
 
 def get_traffic_history(limit=200):
@@ -87,7 +109,6 @@ def get_traffic_history(limit=200):
         rows = conn.execute(
             "SELECT * FROM traffic_history ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
-        conn.close()
         return [dict(r) for r in reversed(rows)]
 
 
@@ -102,14 +123,12 @@ def insert_alert(alert):
             "DELETE FROM alerts WHERE id NOT IN (SELECT id FROM alerts ORDER BY id DESC LIMIT 500)"
         )
         conn.commit()
-        conn.close()
 
 
 def get_alerts(limit=100):
     with _lock:
         conn = get_connection()
         rows = conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-        conn.close()
         return [dict(r) for r in rows]
 
 
@@ -130,7 +149,6 @@ def upsert_known_device(mac, ip, hostname, vendor, now):
                 (mac, ip, hostname, vendor, now, now),
             )
         conn.commit()
-        conn.close()
         return existing is None
 
 
@@ -138,5 +156,4 @@ def get_known_devices():
     with _lock:
         conn = get_connection()
         rows = conn.execute("SELECT * FROM known_devices").fetchall()
-        conn.close()
         return {r["mac"]: dict(r) for r in rows}
