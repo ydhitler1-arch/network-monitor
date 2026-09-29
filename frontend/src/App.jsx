@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import TrafficChart from "./components/TrafficChart.jsx";
 import DeviceList from "./components/DeviceList.jsx";
 import PortScanTable from "./components/PortScanTable.jsx";
@@ -36,7 +36,6 @@ export default function App() {
   useEffect(() => {
     if (!authenticated) return undefined;
     mounted.current = true;
-    getMeta().then(setMeta).catch(() => {});
 
     const handleError = (e) => {
       if (!mounted.current) return;
@@ -47,12 +46,12 @@ export default function App() {
       }
     };
 
-    const pollTraffic = () => {
+    const pollTraffic = () =>
       getTrafficHistory(120)
         .then((data) => mounted.current && setTrafficHistory(data))
         .catch(handleError);
-    };
-    const pollDevices = () => {
+
+    const pollDevices = () =>
       getDevices()
         .then((data) => {
           if (!mounted.current) return;
@@ -60,16 +59,20 @@ export default function App() {
           setDevicesScannedAt(data.scanned_at);
         })
         .catch(handleError);
-    };
-    const pollAlerts = () => {
+
+    const pollAlerts = () =>
       getAlerts(100)
         .then((data) => mounted.current && setAlerts(data))
         .catch(handleError);
-    };
 
-    pollTraffic();
-    pollDevices();
-    pollAlerts();
+    // Fire all initial fetches in parallel — data appears as soon as each
+    // individual request resolves instead of waiting for all three.
+    Promise.all([
+      pollTraffic(),
+      pollDevices(),
+      pollAlerts(),
+      getMeta().then((d) => mounted.current && setMeta(d)).catch(() => {}),
+    ]);
 
     const t1 = setInterval(pollTraffic, TRAFFIC_POLL_MS);
     const t2 = setInterval(pollDevices, DEVICES_POLL_MS);

@@ -1,11 +1,12 @@
 """Flask API server: routes + background monitoring loop."""
 
+import hashlib
 import os
 import threading
 import time
 from datetime import timedelta
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, make_response, request
 from flask_cors import CORS
 
 from backend import alerts, auth, config, db, devices, ports, security, traffic
@@ -126,7 +127,17 @@ def traffic_current():
 @app.route("/api/traffic/history")
 def traffic_history():
     limit = request.args.get("limit", default=120, type=int)
-    return jsonify(traffic.get_history(limit))
+    data = traffic.get_history(limit)
+    # Build an ETag from the last timestamp so unchanged data returns 304.
+    etag = hashlib.md5(
+        str(data[-1]["timestamp"]).encode() if data else b"empty"
+    ).hexdigest()[:16]
+    if request.headers.get("If-None-Match") == etag:
+        return make_response("", 304)
+    resp = make_response(jsonify(data))
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 @app.route("/api/traffic/history/extended")
@@ -187,4 +198,13 @@ def scan_ports_route():
 @app.route("/api/alerts")
 def list_alerts():
     limit = request.args.get("limit", default=100, type=int)
-    return jsonify(alerts.get_recent_alerts(limit))
+    data = alerts.get_recent_alerts(limit)
+    etag = hashlib.md5(
+        str(data[0]["id"]).encode() if data else b"empty"
+    ).hexdigest()[:16]
+    if request.headers.get("If-None-Match") == etag:
+        return make_response("", 304)
+    resp = make_response(jsonify(data))
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp

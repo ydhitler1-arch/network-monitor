@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   AreaChart,
   Area,
@@ -39,20 +39,25 @@ export default function TrafficChart({ history }) {
   }, [range]);
 
   const activeHistory = range === "live" ? history : extendedHistory;
-  const latest = activeHistory[activeHistory.length - 1];
-  const chartData = activeHistory.map((h) => ({
-    time:
-      range === "live"
-        ? new Date(h.timestamp * 1000).toLocaleTimeString()
-        : new Date(h.timestamp * 1000).toLocaleString([], {
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
-    Download: Math.round(h.recv_rate),
-    Upload: Math.round(h.send_rate),
-  }));
+
+  const { latest, chartData } = useMemo(() => {
+    const last = activeHistory[activeHistory.length - 1];
+    const data = activeHistory.map((h) => ({
+      time:
+        range === "live"
+          ? new Date(h.timestamp * 1000).toLocaleTimeString()
+          : new Date(h.timestamp * 1000).toLocaleString([], {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            }),
+      Download: Math.round(h.recv_rate),
+      Upload: Math.round(h.send_rate),
+    }));
+    return { latest: last, chartData: data };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeHistory, range]);
 
   return (
     <div className="panel">
