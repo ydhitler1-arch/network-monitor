@@ -208,3 +208,25 @@ def list_alerts():
     resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = "no-cache"
     return resp
+
+
+@app.route("/api/findings")
+def list_findings():
+    """Persistent port findings: one row per (host, port), updated each scan.
+
+    Unlike /api/alerts (append-only event log), this reflects *current* state:
+    each finding shows its severity, how many times it's been observed, and
+    when it was last confirmed open.  The frontend uses this for the main
+    Security Findings panel.
+    """
+    limit = request.args.get("limit", default=200, type=int)
+    data = alerts.get_port_findings(limit)
+    etag = hashlib.md5(
+        (str(data[0]["last_seen"]) + str(len(data))).encode() if data else b"empty"
+    ).hexdigest()[:16]
+    if request.headers.get("If-None-Match") == etag:
+        return make_response("", 304)
+    resp = make_response(jsonify(data))
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
