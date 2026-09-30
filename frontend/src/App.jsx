@@ -8,7 +8,6 @@ import {
   getTrafficHistory,
   getDevices,
   getAlerts,
-  getFindings,
   getMeta,
   getAuthStatus,
   logout,
@@ -17,7 +16,6 @@ import {
 const TRAFFIC_POLL_MS = 2000;
 const DEVICES_POLL_MS = 10000;
 const ALERTS_POLL_MS = 5000;
-const FINDINGS_POLL_MS = 10000;
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(null); // null = still checking
@@ -25,7 +23,6 @@ export default function App() {
   const [devices, setDevices] = useState([]);
   const [devicesScannedAt, setDevicesScannedAt] = useState(null);
   const [alerts, setAlerts] = useState([]);
-  const [findings, setFindings] = useState([]);
   const [meta, setMeta] = useState(null);
   const [error, setError] = useState("");
   const mounted = useRef(true);
@@ -68,32 +65,24 @@ export default function App() {
         .then((data) => mounted.current && setAlerts(data))
         .catch(handleError);
 
-    const pollFindings = () =>
-      getFindings(200)
-        .then((data) => mounted.current && setFindings(data))
-        .catch(handleError);
-
     // Fire all initial fetches in parallel — data appears as soon as each
     // individual request resolves instead of waiting for all three.
     Promise.all([
       pollTraffic(),
       pollDevices(),
       pollAlerts(),
-      pollFindings(),
       getMeta().then((d) => mounted.current && setMeta(d)).catch(() => {}),
     ]);
 
     const t1 = setInterval(pollTraffic, TRAFFIC_POLL_MS);
     const t2 = setInterval(pollDevices, DEVICES_POLL_MS);
     const t3 = setInterval(pollAlerts, ALERTS_POLL_MS);
-    const t4 = setInterval(pollFindings, FINDINGS_POLL_MS);
 
     return () => {
       mounted.current = false;
       clearInterval(t1);
       clearInterval(t2);
       clearInterval(t3);
-      clearInterval(t4);
     };
   }, [authenticated]);
 
@@ -104,7 +93,6 @@ export default function App() {
 
   const refreshAlerts = () => {
     getAlerts(100).then(setAlerts).catch(() => {});
-    getFindings(200).then(setFindings).catch(() => {});
   };
 
   const handleLogout = async () => {
@@ -115,7 +103,6 @@ export default function App() {
       setTrafficHistory([]);
       setDevices([]);
       setAlerts([]);
-      setFindings([]);
       setError("");
     }
   };
@@ -161,7 +148,7 @@ export default function App() {
           />
         </div>
         <div>
-          <AlertsPanel alerts={alerts} findings={findings} />
+          <AlertsPanel alerts={alerts} />
         </div>
       </div>
     </div>

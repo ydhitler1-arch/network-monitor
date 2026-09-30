@@ -1,4 +1,4 @@
-"""SQLite persistence for traffic history, alerts, known devices, and port findings."""
+"""SQLite persistence for traffic history, alerts, and known devices."""
 
 import os
 import sqlite3
@@ -22,6 +22,7 @@ def get_connection() -> sqlite3.Connection:
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         # WAL mode: readers never block writers and writers never block readers.
+        # This is the single biggest SQLite performance win for concurrent access.
         _conn.execute("PRAGMA journal_mode=WAL")
         # Keep 64 MB of WAL in memory before flushing — reduces fsync calls.
         _conn.execute("PRAGMA wal_autocheckpoint=1000")
@@ -65,31 +66,12 @@ def init_db():
                 last_seen REAL
             )"""
         )
-        # ── Port findings: one row per (host, port) — updated on every rescan,
-        # never duplicated.  This is the source of truth for the findings panel.
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS port_findings (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                host        TEXT    NOT NULL,
-                port        INTEGER NOT NULL,
-                service     TEXT    NOT NULL,
-                severity    TEXT    NOT NULL,
-                description TEXT    NOT NULL,
-                first_seen  REAL    NOT NULL,
-                last_seen   REAL    NOT NULL,
-                seen_count  INTEGER NOT NULL DEFAULT 1,
-                UNIQUE(host, port)
-            )"""
-        )
         # Indexes make ORDER BY id DESC LIMIT n fast even on large tables.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_traffic_id ON traffic_history(id DESC)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_alerts_id ON alerts(id DESC)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_findings_sev ON port_findings(severity, last_seen DESC)"
         )
         conn.commit()
 
@@ -149,55 +131,6 @@ def get_alerts(limit=100):
         rows = conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
 
-
-# ── Port findings ────────────────────────────────────────────────────────────
-
-def upsert_port_finding(host: str, port: int, service: str, severity: str,
-                        description: str, now: float) -> bool:
-    """Insert or update a (host, port) finding.
-
-    Returns True  → this is a brand-new finding (first time we've seen it).
-    Returns False → finding already existed; last_seen + seen_count updated.
-    """
-    with _lock:
-        conn = get_connection()
-        existing = conn.execute(
-            "SELECT id FROM port_findings WHERE host=? AND port=?", (host, port)
-        ).fetchone()
-
-        if existing:
-            conn.execute(
-                """UPDATE port_findings
-                   SET last_seen=?, seen_count=seen_count+1, severity=?, service=?
-                   WHERE host=? AND port=?""",
-                (now, severity, service, host, port),
-            )
-            conn.commit()
-            return False
-        else:
-            conn.execute(
-                """INSERT INTO port_findings
-                   (host, port, service, severity, description, first_seen, last_seen, seen_count)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
-                (host, port, service, severity, description, now, now),
-            )
-            conn.commit()
-            return True
-
-
-def get_port_findings(limit: int = 200) -> list[dict]:
-    """Return active port findings ordered by severity tier then most-recently seen."""
-    _sev_order = "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"
-    with _lock:
-        conn = get_connection()
-        rows = conn.execute(
-            f"SELECT * FROM port_findings ORDER BY {_sev_order}, last_seen DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-# ── Known devices ────────────────────────────────────────────────────────────
 
 def upsert_known_device(mac, ip, hostname, vendor, now):
     """Returns True if this MAC was not previously known (i.e. a new device)."""
