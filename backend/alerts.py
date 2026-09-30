@@ -23,6 +23,17 @@ SPIKE_WINDOW = 30
 SPIKE_MULTIPLIER = 4
 SPIKE_MIN_RATE = 50 * 1024  # 50 KB/s floor so idle jitter doesn't fire
 
+# How long (seconds) before the same alert can fire again for the same host+port.
+# Default: 1 hour — so persistent open ports won't flood the alerts panel.
+RISKY_PORT_COOLDOWN = 3600
+
+# In-memory deduplication cache: key = (host, port), value = last alert timestamp
+_risky_port_seen: dict = {}
+
+# Cooldown for traffic spike alerts (per direction) — 5 minutes
+SPIKE_COOLDOWN = 300
+_spike_seen: dict = {}  # key = direction ("upload"/"download"), value = last alert time
+
 
 def _emit(severity, category, message):
     alert = {"timestamp": time.time(), "severity": severity, "category": category, "message": message}
@@ -37,9 +48,15 @@ def check_traffic_spike(history):
         return alerts
     recent = history[-(SPIKE_WINDOW + 1):]
     baseline, latest = recent[:-1], recent[-1]
+    now = time.time()
     for direction, key in (("upload", "send_rate"), ("download", "recv_rate")):
         mean = statistics.mean(h[key] for h in baseline)
         if latest[key] > SPIKE_MIN_RATE and mean > 0 and latest[key] > mean * SPIKE_MULTIPLIER:
+            # Skip if we already alerted on this direction recently
+            last = _spike_seen.get(direction, 0)
+            if now - last < SPIKE_COOLDOWN:
+                continue
+            _spike_seen[direction] = now
             alerts.append(
                 _emit(
                     "warning",
@@ -72,20 +89,33 @@ def check_new_devices(devices):
 
 
 def check_risky_ports(host, open_ports):
-    """Flag any open port that's on the high-risk list."""
+    """Flag any open port that's on the high-risk list.
+
+    Duplicate alerts for the same (host, port) are suppressed for
+    RISKY_PORT_COOLDOWN seconds so a persistent open port doesn't
+    flood the alerts panel on every 30-second scan cycle.
+    """
     alerts = []
+    now = time.time()
     for entry in open_ports:
         port = entry["port"]
-        if port in HIGH_RISK_PORTS:
-            alerts.append(
-                _emit(
-                    "critical",
-                    "risky_port",
-                    f"High-risk port {port} ({entry['service']}) open on {host}: {HIGH_RISK_PORTS[port]}",
-                )
+        if port not in HIGH_RISK_PORTS:
+            continue
+        key = (host, port)
+        last_seen = _risky_port_seen.get(key, 0)
+        if now - last_seen < RISKY_PORT_COOLDOWN:
+            continue  # Already alerted recently — skip
+        _risky_port_seen[key] = now
+        alerts.append(
+            _emit(
+                "critical",
+                "risky_port",
+                f"High-risk port {port} ({entry['service']}) open on {host}: {HIGH_RISK_PORTS[port]}",
             )
+        )
     return alerts
 
 
 def get_recent_alerts(limit=100):
     return db.get_alerts(limit)
+
