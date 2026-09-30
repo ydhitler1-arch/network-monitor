@@ -1,13 +1,10 @@
 """Flask API server: routes + background monitoring loop."""
 
 import hashlib
-import logging
 import os
 import threading
 import time
 from datetime import timedelta
-
-log = logging.getLogger(__name__)
 
 from flask import Flask, jsonify, make_response, request
 from flask_cors import CORS
@@ -81,10 +78,10 @@ def _monitor_loop():
                         if result:
                             alerts.check_risky_ports(dev["ip"], result)
                     except Exception:
-                        log.debug("Port scan failed for %s", dev["ip"], exc_info=True)
+                        pass
                 last_device_scan = now
         except Exception:
-            log.exception("Monitor loop error — will retry in %ss", TRAFFIC_INTERVAL)
+            pass
         time.sleep(TRAFFIC_INTERVAL)
 
 

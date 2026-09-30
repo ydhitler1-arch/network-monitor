@@ -13,7 +13,6 @@ import socket
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import psutil
 
@@ -118,27 +117,13 @@ def scan_devices():
             found.setdefault(d["mac"], d)
 
     now = time.time()
-    mac_list = list(found.items())
-
-    # Resolve all hostnames concurrently — each lookup blocks up to 0.5 s, so
-    # doing them in parallel keeps total wait time near a single RTT.
-    ip_to_hostname = {}
-    with ThreadPoolExecutor(max_workers=20) as pool:
-        future_to_ip = {pool.submit(_resolve_hostname, d["ip"]): d["ip"] for _, d in mac_list}
-        for future in as_completed(future_to_ip):
-            ip = future_to_ip[future]
-            try:
-                ip_to_hostname[ip] = future.result()
-            except Exception:
-                ip_to_hostname[ip] = ""
-
     devices = []
-    for mac, d in mac_list:
+    for mac, d in found.items():
         devices.append(
             {
                 "ip": d["ip"],
                 "mac": mac,
-                "hostname": ip_to_hostname.get(d["ip"], ""),
+                "hostname": _resolve_hostname(d["ip"]),
                 "last_seen": now,
             }
         )
@@ -151,7 +136,6 @@ def scan_devices():
 
     devices.sort(key=_sort_key)
     return devices
-
 
 
 def scapy_available():
