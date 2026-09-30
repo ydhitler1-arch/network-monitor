@@ -1,11 +1,20 @@
-"""Rule engine: high-risk open ports, traffic spikes, and new devices joining.
+"""Rule engine: risky ports, traffic spikes, new devices.
 
-Severity tiers
---------------
-critical  — direct remote-code-execution / active-exploit targets (RDP, Telnet, SMB)
-high      — credential-exposure or unauthenticated data stores (MySQL, MSSQL, Redis, MongoDB)
-medium    — information-disclosure / lateral-movement helpers (MSRPC, NetBIOS, FTP)
-low       — weak/legacy services worth tracking (VNC)
+Severity tiers (applied to port_findings, NOT hardcoded to 'critical'):
+  critical — direct RCE / active-exploit targets  (Telnet, RDP, SMB)
+  high     — unauthenticated data stores          (MySQL, MSSQL, Redis, MongoDB)
+  medium   — info-disclosure / lateral movement   (MSRPC, NetBIOS, FTP)
+  low      — weak legacy services                 (VNC)
+
+Deduplication strategy
+  Port findings are stored in the `port_findings` DB table (one row per
+  host+port).  Each scan cycle calls db.upsert_port_finding(), which either
+  creates a new row (is_new=True) or updates last_seen + seen_count
+  (is_new=False).  A one-time event-alert is emitted to the `alerts` table
+  ONLY when is_new=True.  This means:
+  - The findings table always reflects current state, surviving restarts.
+  - The alerts log captures only genuine first-seen events.
+  - No duplicate alert rows accumulate across scan cycles.
 """
 
 import logging
@@ -16,8 +25,8 @@ from backend import db
 
 log = logging.getLogger(__name__)
 
-# ── Port metadata ────────────────────────────────────────────────────────────
-# Each entry: (service_name, severity, description)
+# ── Severity-tiered port catalogue ───────────────────────────────────────────
+# key → (display_name, severity, description)
 PORT_INFO: dict[int, tuple[str, str, str]] = {
     23:    ("Telnet",   "critical", "Telnet is unencrypted and frequently exploited"),
     3389:  ("RDP",      "critical", "RDP is a top target for ransomware and brute force"),
@@ -32,25 +41,18 @@ PORT_INFO: dict[int, tuple[str, str, str]] = {
     5900:  ("VNC",      "low",      "VNC is frequently left unauthenticated"),
 }
 
-# Keep HIGH_RISK_PORTS as a flat dict for backward-compat with app.py / API meta endpoint
+# Flat description map kept for backward-compat (used by /api/meta)
 HIGH_RISK_PORTS: dict[int, str] = {p: info[2] for p, info in PORT_INFO.items()}
 
-# ── Cooldowns ────────────────────────────────────────────────────────────────
-# Per (port) — grouped alerts fire at most once per hour per port
-RISKY_PORT_COOLDOWN = 3600
-# Per direction — traffic-spike alerts fire at most once per 5 minutes
+# Traffic-spike cooldown (per direction): 5 minutes between repeated alerts
 SPIKE_COOLDOWN = 300
-
-# ── In-memory dedup caches ───────────────────────────────────────────────────
-# key = port,      value = {"last_seen": float, "hosts": set[str]}
-_port_state: dict[int, dict] = {}
-# key = direction, value = last alert timestamp
 _spike_seen: dict[str, float] = {}
 
 
-# ── Internal helpers ─────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _emit(severity: str, category: str, message: str) -> dict:
+    """Write a one-time event to the alerts log and return it."""
     alert = {
         "timestamp": time.time(),
         "severity": severity,
@@ -58,11 +60,12 @@ def _emit(severity: str, category: str, message: str) -> dict:
         "message": message,
     }
     db.insert_alert(alert)
-    log.info("ALERT severity=%-8s category=%-12s  %s", severity, category, message)
+    # Log every emitted alert with its severity so it's easy to verify the fix.
+    log.info("[ALERT] severity=%-8s  category=%-14s  %s", severity, category, message)
     return alert
 
 
-# ── Public rule functions ────────────────────────────────────────────────────
+# ── Public rule functions ─────────────────────────────────────────────────────
 
 def check_traffic_spike(history: list) -> list:
     """Flag upload/download rates that are far above their recent baseline."""
@@ -85,14 +88,11 @@ def check_traffic_spike(history: list) -> list:
         if now - _spike_seen.get(direction, 0) < SPIKE_COOLDOWN:
             continue
         _spike_seen[direction] = now
-        alerts.append(
-            _emit(
-                "warning",
-                "traffic_spike",
-                f"Unusual {direction} spike: {latest[key] / 1024:.0f} KB/s "
-                f"(baseline {mean / 1024:.0f} KB/s)",
-            )
-        )
+        alerts.append(_emit(
+            "warning", "traffic_spike",
+            f"Unusual {direction} spike: {latest[key] / 1024:.0f} KB/s "
+            f"(baseline {mean / 1024:.0f} KB/s)",
+        ))
     return alerts
 
 
@@ -106,27 +106,24 @@ def check_new_devices(devices: list) -> list:
         db.upsert_known_device(dev["mac"], dev["ip"], dev.get("hostname", ""), "", now)
         if is_new:
             label = f" - {dev['hostname']}" if dev.get("hostname") else ""
-            alerts.append(
-                _emit(
-                    "info",
-                    "new_device",
-                    f"New device joined the network: {dev['ip']} ({dev['mac']}){label}",
-                )
-            )
+            alerts.append(_emit(
+                "info", "new_device",
+                f"New device joined the network: {dev['ip']} ({dev['mac']}){label}",
+            ))
     return alerts
 
 
 def check_risky_ports(host: str, open_ports: list) -> list:
-    """Flag high-risk open ports with proper severity tiering.
+    """Update persistent port findings and emit a one-time alert only on first discovery.
 
-    Grouping: instead of one alert per (host, port), we accumulate hosts that
-    share the same open port and emit a single grouped alert per port per
-    cooldown window — e.g. 'NetBIOS (139) exposed on 14 hosts: 10.1.20.12,
-    10.1.20.13, …'.  This keeps the panel readable on busy LANs.
-
-    Severity is read from PORT_INFO, not hardcoded to 'critical'.
+    For each (host, port):
+      - db.upsert_port_finding() is called every scan — it updates last_seen
+        and seen_count in the DB without creating a new row.
+      - Only when the finding is brand-new (upsert returns True) do we write
+        an entry to the alerts log.
+      - The severity comes from PORT_INFO, never hardcoded to 'critical'.
     """
-    alerts = []
+    new_alerts = []
     now = time.time()
 
     for entry in open_ports:
@@ -136,34 +133,29 @@ def check_risky_ports(host: str, open_ports: list) -> list:
 
         service, severity, description = PORT_INFO[port]
 
-        state = _port_state.setdefault(port, {"last_seen": 0.0, "hosts": set()})
-        state["hosts"].add(host)
-
-        if now - state["last_seen"] < RISKY_PORT_COOLDOWN:
-            # Still within the cooldown window — accumulate the host but don't emit yet
-            continue
-
-        # Cooldown expired — emit a grouped alert covering all accumulated hosts
-        state["last_seen"] = now
-        hosts_snapshot = sorted(state["hosts"])
-        state["hosts"] = set()   # reset accumulator for next window
-
-        count = len(hosts_snapshot)
-        if count == 1:
-            host_summary = hosts_snapshot[0]
-        elif count <= 4:
-            host_summary = ", ".join(hosts_snapshot)
-        else:
-            host_summary = f"{', '.join(hosts_snapshot[:3])}, +{count - 3} more"
-
-        message = (
-            f"{service} (port {port}) exposed on {count} host{'s' if count > 1 else ''}: "
-            f"{host_summary} — {description}"
+        # Log the severity value at the point of generation so it can be verified.
+        log.debug(
+            "[FINDING] host=%-16s  port=%-5s  service=%-8s  severity=%s",
+            host, port, service, severity,
         )
-        alerts.append(_emit(severity, "risky_port", message))
 
-    return alerts
+        is_new = db.upsert_port_finding(host, port, service, severity, description, now)
+
+        if is_new:
+            # First time we've ever seen this host+port — write a one-time alert.
+            new_alerts.append(_emit(
+                severity, "risky_port",
+                f"{service} (port {port}) first detected on {host}: {description}",
+            ))
+
+    return new_alerts
 
 
 def get_recent_alerts(limit: int = 100) -> list:
+    """Return the most recent one-time event alerts (new device, spike, first-seen findings)."""
     return db.get_alerts(limit)
+
+
+def get_port_findings(limit: int = 200) -> list:
+    """Return all known port findings ordered by severity then last_seen."""
+    return db.get_port_findings(limit)

@@ -54,6 +54,7 @@ export const getExtendedTrafficHistory = (limit = 2000) =>
 export const getDevices = () => request("/devices");
 export const rescanDevices = () => request("/devices/scan", { method: "POST" });
 export const getAlerts = (limit = 100) => request(`/alerts?limit=${limit}`);
+export const getFindings = (limit = 200) => request(`/findings?limit=${limit}`);
 export const getMeta = () => request("/meta");
 
 export const scanPorts = (host, ports, engine) => {
