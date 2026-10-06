@@ -9,6 +9,10 @@ backend, React (Vite) frontend.
 > **Scope note:** the device scan and port scanner operate on your own local
 > network only. Only scan hosts/networks you own or are authorized to test.
 
+![Network Monitor dashboard](docs/dashboard.png)
+
+*Screenshot taken with fabricated demo data (made-up devices, addresses and findings), not a real network.*
+
 ## Features
 
 - **Live traffic monitoring** — real bandwidth in/out sampled from `psutil`,
