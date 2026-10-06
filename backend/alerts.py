@@ -112,7 +112,7 @@ def check_new_devices(devices: list) -> list:
     return alerts_out
 
 
-def check_risky_ports(host: str, open_ports: list) -> list:
+def check_risky_ports(host: str, open_ports: list, scanned_ports=None) -> list:
     """THE deduplication entry point for port scan results.
 
     For every open port found on 'host':
@@ -148,11 +148,18 @@ def check_risky_ports(host: str, open_ports: list) -> list:
         if is_new:
             # Only fires once per (host, port) — never on subsequent scans.
             new_alerts.append(_emit(severity, "risky_port",
-                f"{service} (port {port}) first detected on {host}: {description}"))
+                f"{service} (port {port}) detected on {host}: {description}"))
         else:
             log.debug(
                 "[FINDING] SKIPPED duplicate alert for %s port %s (seen before)", host, port
             )
+
+    if scanned_ports is not None:
+        closed = db.close_missing_findings(
+            host, scanned_ports, [e["port"] for e in open_ports], now
+        )
+        if closed:
+            log.info("[FINDING] %d finding(s) on %s no longer open", closed, host)
 
     return new_alerts
 

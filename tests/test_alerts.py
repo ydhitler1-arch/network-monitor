@@ -75,3 +75,56 @@ def test_ignores_safe_port(monkeypatch):
     monkeypatch.setattr(alerts.db, "insert_alert", lambda alert: None)
     open_ports = [{"port": 80, "service": "HTTP", "state": "open"}]
     assert alerts.check_risky_ports("10.0.0.5", open_ports) == []
+
+
+def test_finding_closes_when_port_no_longer_open(temp_db):
+    redis = [{"port": 6379, "service": "Redis", "state": "open"}]
+    alerts.check_risky_ports("10.0.0.5", redis, scanned_ports=[6379, 3389])
+
+    alerts.check_risky_ports("10.0.0.5", [], scanned_ports=[6379, 3389])
+
+    finding = alerts.get_port_findings()[0]
+    assert finding["status"] == "closed" and finding["closed_at"] is not None
+
+
+def test_close_ignores_ports_outside_the_scan(temp_db):
+    redis = [{"port": 6379, "service": "Redis", "state": "open"}]
+    alerts.check_risky_ports("10.0.0.5", redis, scanned_ports=[6379])
+
+    alerts.check_risky_ports("10.0.0.5", [], scanned_ports=[80])  # didn't cover 6379
+
+    assert alerts.get_port_findings()[0]["status"] == "open"
+
+
+def test_reopened_finding_alerts_again(temp_db):
+    redis = [{"port": 6379, "service": "Redis", "state": "open"}]
+    alerts.check_risky_ports("10.0.0.5", redis, scanned_ports=[6379])
+    alerts.check_risky_ports("10.0.0.5", [], scanned_ports=[6379])
+
+    again = alerts.check_risky_ports("10.0.0.5", redis, scanned_ports=[6379])
+
+    assert len(again) == 1
+    finding = alerts.get_port_findings()[0]
+    assert finding["status"] == "open" and finding["closed_at"] is None
+
+
+def test_init_db_migrates_old_port_findings_table(tmp_path, monkeypatch):
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    old = sqlite3.connect(path)
+    old.execute("""CREATE TABLE port_findings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, host TEXT NOT NULL, port INTEGER NOT NULL,
+        service TEXT NOT NULL, severity TEXT NOT NULL, description TEXT NOT NULL,
+        first_seen REAL NOT NULL, last_seen REAL NOT NULL, seen_count INTEGER NOT NULL DEFAULT 1,
+        UNIQUE(host, port))""")
+    old.execute("INSERT INTO port_findings VALUES (1,'h',23,'Telnet','critical','d',1,1,1)")
+    old.commit()
+    old.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    monkeypatch.setattr(db, "_conn", None)
+
+    db.init_db()
+
+    assert db.get_port_findings()[0]["status"] == "open"
+    db._conn.close()

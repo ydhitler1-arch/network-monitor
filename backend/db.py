@@ -65,6 +65,13 @@ def init_db():
             seen_count  INTEGER NOT NULL DEFAULT 1,
             UNIQUE(host, port)
         )""")
+        # Migration: findings used to be open forever. `status` tracks whether
+        # the port was open on the most recent scan that covered it.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(port_findings)")}
+        if "status" not in cols:
+            conn.execute("ALTER TABLE port_findings ADD COLUMN status TEXT NOT NULL DEFAULT 'open'")
+        if "closed_at" not in cols:
+            conn.execute("ALTER TABLE port_findings ADD COLUMN closed_at REAL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_traffic_id ON traffic_history(id DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_id   ON alerts(id DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_findings_sev ON port_findings(severity, last_seen DESC)")
@@ -127,22 +134,22 @@ def upsert_port_finding(host: str, port: int, service: str, severity: str,
                         description: str, now: float) -> bool:
     """Insert or update a (host, port) finding.
 
-    Returns True  = brand-new finding (never seen before).
-    Returns False = already known; last_seen + seen_count updated.
+    Returns True  = brand-new finding, or one re-opened after being closed.
+    Returns False = already open; last_seen + seen_count updated.
     """
     with _lock:
         conn = get_connection()
         existing = conn.execute(
-            "SELECT id FROM port_findings WHERE host=? AND port=?", (host, port)
+            "SELECT status FROM port_findings WHERE host=? AND port=?", (host, port)
         ).fetchone()
         if existing:
             conn.execute(
-                "UPDATE port_findings SET last_seen=?, seen_count=seen_count+1, severity=?, service=? "
-                "WHERE host=? AND port=?",
+                "UPDATE port_findings SET last_seen=?, seen_count=seen_count+1, severity=?, service=?, "
+                "status='open', closed_at=NULL WHERE host=? AND port=?",
                 (now, severity, service, host, port),
             )
             conn.commit()
-            return False        # not new
+            return existing["status"] == "closed"   # re-opened counts as new
         else:
             conn.execute(
                 "INSERT INTO port_findings "
@@ -154,6 +161,25 @@ def upsert_port_finding(host: str, port: int, service: str, severity: str,
             return True         # new
 
 
+def close_missing_findings(host: str, scanned_ports, open_ports, now: float) -> int:
+    """Mark open findings on `host` as closed if their port was part of this
+    scan (`scanned_ports`) but not found open (`open_ports`). Ports outside
+    the scan are left alone. Returns the number of findings closed."""
+    to_close = [p for p in set(scanned_ports) - set(open_ports)]
+    if not to_close:
+        return 0
+    with _lock:
+        conn = get_connection()
+        marks = ",".join("?" * len(to_close))
+        cur = conn.execute(
+            f"UPDATE port_findings SET status='closed', closed_at=? "
+            f"WHERE host=? AND status='open' AND port IN ({marks})",
+            (now, host, *to_close),
+        )
+        conn.commit()
+        return cur.rowcount
+
+
 def get_port_findings(limit: int = 200) -> list:
     _sev = ("CASE severity "
             "WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
@@ -161,7 +187,7 @@ def get_port_findings(limit: int = 200) -> list:
     with _lock:
         conn = get_connection()
         rows = conn.execute(
-            f"SELECT * FROM port_findings ORDER BY {_sev}, last_seen DESC LIMIT ?",
+            f"SELECT * FROM port_findings ORDER BY (status='closed'), {_sev}, last_seen DESC LIMIT ?",
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]

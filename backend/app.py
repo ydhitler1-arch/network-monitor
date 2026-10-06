@@ -88,8 +88,7 @@ def _scan_loop():
             for dev in found:
                 try:
                     result = ports.socket_scan(dev["ip"], ports=RISKY_PORT_LIST, timeout=0.3)
-                    if result:
-                        alerts.check_risky_ports(dev["ip"], result)
+                    alerts.check_risky_ports(dev["ip"], result, scanned_ports=RISKY_PORT_LIST)
                 except Exception:
                     log.exception("Port scan failed for %s", dev.get("ip"))
         except Exception:
@@ -207,7 +206,11 @@ def scan_ports_route():
     # can't return a different (public) address (DNS rebinding).
     result = ports.scan_ports(resolved_or_reason, ports=port_list, use_nmap=use_nmap)
     result["host"] = host
-    result["new_alerts"] = alerts.check_risky_ports(resolved_or_reason, result["open_ports"])
+    result["new_alerts"] = alerts.check_risky_ports(
+        resolved_or_reason,
+        result["open_ports"],
+        scanned_ports=port_list or ports.COMMON_PORTS,
+    )
     return jsonify(result)
 
 
