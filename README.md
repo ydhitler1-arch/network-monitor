@@ -31,6 +31,30 @@ backend, React (Vite) frontend.
 Traffic samples and alerts are persisted to a local SQLite database
 (`data/scan_history.db`) so history survives a restart.
 
+### Alert types
+
+| Category          | Severity                  | Fires when                                              | Repeats?                                   |
+|-------------------|---------------------------|---------------------------------------------------------|--------------------------------------------|
+| `risky_port`      | critical / high / medium / low | A risky port is found open on a host (see tiers below) | Once per host and port; again only if the port closes and later reopens |
+| `traffic_spike`   | warning                   | Upload or download rate is over 4x the recent average and above 50 KB/s | At most once per direction every 5 minutes |
+| `new_device`      | info                      | A MAC address is seen for the first time                | Never for the same MAC                     |
+| `device_left`     | info                      | A known device has not been seen for 5 minutes          | Once per departure                         |
+| `device_returned` | info                      | A device reported as left is seen again                 | Once per return                            |
+
+Risky-port severity tiers:
+
+- **critical** — Telnet (23), RDP (3389), SMB (445)
+- **high** — MySQL (3306), MSSQL (1433), Redis (6379), MongoDB (27017)
+- **medium** — FTP (21), MSRPC (135), NetBIOS (139)
+- **low** — VNC (5900)
+
+Alerts go into an event log (`/api/alerts`, the newest 500 are kept).
+Port findings are kept separately as one row per host and port
+(`/api/findings`), showing whether the port is still open, when it was last
+seen, and how many scans have seen it. That is what the *Security Findings*
+panel shows. A finding is marked closed when a scan covers its port and it is
+no longer open.
+
 ### Hardening built in
 
 - **Login required** â€” a login form (session-cookie based, `backend/auth.py`
@@ -308,6 +332,7 @@ All routes require an active login session except `/api/auth/login`,
 | POST   | `/api/devices/scan`   | Trigger an immediate device scan (rate-limited)|
 | GET    | `/api/ports/scan`     | Scan a private/local host (`?host=&ports=&engine=nmap`, rate-limited) |
 | GET    | `/api/alerts`         | Recent alerts (`?limit=`)                      |
+| GET    | `/api/findings`       | Port findings, one per host and port (`?limit=`) |
 | GET    | `/api/meta`           | Engine availability + high-risk port reference |
 
 ## Configuration
