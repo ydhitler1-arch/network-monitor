@@ -128,3 +128,20 @@ def test_init_db_migrates_old_port_findings_table(tmp_path, monkeypatch):
 
     assert db.get_port_findings()[0]["status"] == "open"
     db._conn.close()
+
+
+def test_old_rows_pruned_in_batches(temp_db, monkeypatch):
+    monkeypatch.setattr(db, "ALERTS_RETENTION", 5)
+    monkeypatch.setattr(db, "PRUNE_EVERY", 10)
+    monkeypatch.setitem(db._inserts_since_prune, "alerts", 0)
+
+    def add(i):
+        db.insert_alert({"timestamp": i, "severity": "info", "category": "t", "message": str(i)})
+
+    for i in range(10):          # prune ran on insert 0 only, so nothing trimmed yet
+        add(i)
+    assert len(db.get_alerts(100)) == 10
+
+    add(10)                      # next prune cycle starts: trims to newest 5, then keeps this one
+    rows = db.get_alerts(100)
+    assert len(rows) <= 6 and rows[0]["message"] == "10"

@@ -79,6 +79,20 @@ def init_db():
 
 
 TRAFFIC_HISTORY_RETENTION = 17280
+ALERTS_RETENTION = 500
+
+# Pruning scans the table, so do it every N inserts rather than on each one.
+# Tables can overshoot their retention by at most N-1 rows in between.
+PRUNE_EVERY = 100
+_inserts_since_prune = {"traffic_history": 0, "alerts": 0}
+
+
+def _should_prune(table):
+    """Call with _lock held. True once every PRUNE_EVERY inserts (and on the
+    first insert after startup, so a restart still trims an oversized table)."""
+    count = _inserts_since_prune[table]
+    _inserts_since_prune[table] = (count + 1) % PRUNE_EVERY
+    return count == 0
 
 
 def insert_traffic(sample):
@@ -89,11 +103,12 @@ def insert_traffic(sample):
             (sample["timestamp"], sample["bytes_sent"], sample["bytes_recv"],
              sample["send_rate"], sample["recv_rate"]),
         )
-        conn.execute(
-            "DELETE FROM traffic_history WHERE id NOT IN "
-            "(SELECT id FROM traffic_history ORDER BY id DESC LIMIT ?)",
-            (TRAFFIC_HISTORY_RETENTION,),
-        )
+        if _should_prune("traffic_history"):
+            conn.execute(
+                "DELETE FROM traffic_history WHERE id NOT IN "
+                "(SELECT id FROM traffic_history ORDER BY id DESC LIMIT ?)",
+                (TRAFFIC_HISTORY_RETENTION,),
+            )
         conn.commit()
 
 
@@ -113,9 +128,11 @@ def insert_alert(alert):
             "INSERT INTO alerts (timestamp,severity,category,message) VALUES (?,?,?,?)",
             (alert["timestamp"], alert["severity"], alert["category"], alert["message"]),
         )
-        conn.execute(
-            "DELETE FROM alerts WHERE id NOT IN (SELECT id FROM alerts ORDER BY id DESC LIMIT 500)"
-        )
+        if _should_prune("alerts"):
+            conn.execute(
+                "DELETE FROM alerts WHERE id NOT IN (SELECT id FROM alerts ORDER BY id DESC LIMIT ?)",
+                (ALERTS_RETENTION,),
+            )
         conn.commit()
 
 
