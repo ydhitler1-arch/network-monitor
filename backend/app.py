@@ -1,6 +1,7 @@
 """Flask API server: routes + background monitoring loop."""
 
 import hashlib
+import json
 import logging
 import os
 import threading
@@ -44,6 +45,19 @@ def _security_headers(response):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
+
+
+def _etag_json(data, version):
+    """JSON response with an ETag derived from `version` (a string identifying
+    the data's current state), or a 304 if the client already has it."""
+    # Cache validator only, not security-sensitive.
+    etag = hashlib.md5(version.encode(), usedforsecurity=False).hexdigest()[:16]
+    if request.headers.get("If-None-Match") == etag:
+        return make_response("", 304)
+    resp = make_response(jsonify(data))
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 _state_lock = threading.Lock()
@@ -153,16 +167,8 @@ def traffic_current():
 def traffic_history():
     limit = request.args.get("limit", default=120, type=int)
     data = traffic.get_history(limit)
-    # Build an ETag from the last timestamp so unchanged data returns 304.
-    etag = hashlib.md5(
-        str(data[-1]["timestamp"]).encode() if data else b"empty"
-    ).hexdigest()[:16]
-    if request.headers.get("If-None-Match") == etag:
-        return make_response("", 304)
-    resp = make_response(jsonify(data))
-    resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "no-cache"
-    return resp
+    # Last timestamp identifies the state, so unchanged data returns 304.
+    return _etag_json(data, str(data[-1]["timestamp"]) if data else "empty")
 
 
 @app.route("/api/traffic/history/extended")
@@ -241,15 +247,8 @@ def scan_ports_route():
 def list_alerts():
     limit = request.args.get("limit", default=100, type=int)
     data = alerts.get_recent_alerts(limit)
-    etag = hashlib.md5(
-        str(data[0]["id"]).encode() if data else b"empty"
-    ).hexdigest()[:16]
-    if request.headers.get("If-None-Match") == etag:
-        return make_response("", 304)
-    resp = make_response(jsonify(data))
-    resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "no-cache"
-    return resp
+    # Append-only log: the newest id identifies the state.
+    return _etag_json(data, str(data[0]["id"]) if data else "empty")
 
 
 @app.route("/api/findings")
@@ -263,12 +262,6 @@ def list_findings():
     """
     limit = request.args.get("limit", default=200, type=int)
     data = alerts.get_port_findings(limit)
-    etag = hashlib.md5(
-        (str(data[0]["last_seen"]) + str(len(data))).encode() if data else b"empty"
-    ).hexdigest()[:16]
-    if request.headers.get("If-None-Match") == etag:
-        return make_response("", 304)
-    resp = make_response(jsonify(data))
-    resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "no-cache"
-    return resp
+    # Rows are updated in place (status, seen_count, ...), so hash the whole
+    # payload rather than a single field.
+    return _etag_json(data, json.dumps(data, sort_keys=True))

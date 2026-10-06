@@ -48,3 +48,19 @@ def test_scan_rejected_when_all_scan_slots_busy(auth_client):
     finally:
         for _ in range(held):
             app_module._scan_slots.release()
+
+
+def test_findings_etag_changes_when_a_row_is_updated(auth_client, monkeypatch):
+    from backend import alerts
+
+    rows = [{"id": 1, "host": "h", "port": 23, "last_seen": 1.0, "seen_count": 1}]
+    monkeypatch.setattr(alerts, "get_port_findings", lambda limit: rows)
+
+    first = auth_client.get("/api/findings")
+    rows[0] = {**rows[0], "seen_count": 2}  # same last_seen and row count
+    second = auth_client.get("/api/findings", headers={"If-None-Match": first.headers["ETag"]})
+
+    assert second.status_code == 200
+    assert second.headers["ETag"] != first.headers["ETag"]
+    unchanged = auth_client.get("/api/findings", headers={"If-None-Match": second.headers["ETag"]})
+    assert unchanged.status_code == 304
