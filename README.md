@@ -98,6 +98,44 @@ difference from a CRA project.)
   - [nmap](https://nmap.org/download.html) on your PATH so the port scanner
     can use the `nmap` engine — without it, the socket-based scanner is used
 
+## Running locally
+
+Everything runs on your own machine, and nothing needs to be hosted. The
+backend has to run on a machine on the network you want to monitor, because
+it discovers devices and scans ports from there.
+
+**Fastest way to see the dashboard** (after the one-time setup below):
+
+```bash
+cd frontend && npm install && npm run build && cd ..   # build the UI once
+python run.py                                          # start the backend
+```
+
+Then open **http://127.0.0.1:5000** and sign in. The backend serves the built
+frontend itself, so this is one process and one port. Stop it with `Ctrl+C`.
+On Windows, `.\start.ps1` / `.\stop.ps1` do the same build-and-run (see
+"Quick start" below).
+
+What to expect on first run:
+
+- **Login:** use `NETMON_USERNAME` / `NETMON_PASSWORD` from `.env`. If you
+  haven't set them, a random password is printed in the console at startup.
+- **Devices:** the first scan runs a few seconds after startup, then every
+  30s. Every device found on a new database triggers a "new device" alert, so
+  expect a burst of alerts the first time.
+- **Findings:** risky open ports (Telnet, SMB, RDP, databases, and so on)
+  appear under *Security Findings*, graded critical/high/medium/low. A
+  finding is marked closed once its port stops responding.
+- **Device alerts:** a device is reported as left after 5 minutes without
+  being seen, and reported again when it comes back.
+- **Data:** history is stored in `data/scan_history.db` (git-ignored). Delete
+  it to start fresh.
+- **Logs:** alerts and errors print to the console where `run.py` is running.
+
+While developing the frontend, use `npm run dev` in `frontend/` instead
+(hot reload on http://localhost:5173, proxying `/api` to the backend). Run
+the backend tests with `pytest` (see "Running tests").
+
 ## Setup
 
 ### Quick start (Windows): one command
