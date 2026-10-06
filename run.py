@@ -18,4 +18,4 @@ if __name__ == "__main__":
     config.warn_startup()
     start_background_monitor()
     print(f"Network Monitor serving on http://{config.HOST}:{config.PORT}")
-    serve(app, host=config.HOST, port=config.PORT)
+    serve(app, host=config.HOST, port=config.PORT, threads=config.THREADS)

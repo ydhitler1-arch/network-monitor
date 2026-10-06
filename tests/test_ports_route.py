@@ -32,3 +32,19 @@ def test_scan_rejects_non_integer_ports(auth_client):
 def test_scan_route_requires_auth(client):
     resp = client.get("/api/ports/scan?host=127.0.0.1")
     assert resp.status_code == 401
+
+
+def test_scan_rejected_when_all_scan_slots_busy(auth_client):
+    from backend import app as app_module
+
+    held = 0
+    try:
+        while app_module._scan_slots.acquire(blocking=False):
+            held += 1
+        resp = auth_client.get("/api/ports/scan?host=127.0.0.1&ports=1")
+        assert resp.status_code == 429
+        assert resp.headers["Retry-After"]
+        assert auth_client.post("/api/devices/scan").status_code == 429
+    finally:
+        for _ in range(held):
+            app_module._scan_slots.release()

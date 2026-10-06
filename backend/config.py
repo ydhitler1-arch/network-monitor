@@ -33,6 +33,10 @@ CORS_ORIGINS = [
     if o.strip()
 ]
 
+# Waitress worker threads. A synchronous scan holds one for its whole duration,
+# so keep this comfortably above MAX_CONCURRENT_SCANS in app.py.
+THREADS = int(os.environ.get("NETMON_THREADS", "8"))
+
 SCAN_RATE_LIMIT = os.environ.get("NETMON_SCAN_RATE_LIMIT", "10 per minute")
 LOGIN_RATE_LIMIT = os.environ.get("NETMON_LOGIN_RATE_LIMIT", "5 per minute")
 

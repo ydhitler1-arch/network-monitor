@@ -282,6 +282,7 @@ Environment variables (see `.env.example`), loaded via `backend/config.py`:
 - `NETMON_CORS_ORIGINS` — comma-separated allowed origins
 - `NETMON_LOGIN_RATE_LIMIT` / `NETMON_SCAN_RATE_LIMIT` — rate limits
   (default `5 per minute` / `10 per minute`)
+- `NETMON_THREADS` — server worker threads (default 8)
 
 Other tunable constants live at the top of `backend/app.py` and
 `backend/alerts.py`:

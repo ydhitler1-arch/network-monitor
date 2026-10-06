@@ -55,6 +55,19 @@ DEVICE_SCAN_INTERVAL = 30
 RISKY_PORT_LIST = list(alerts.HIGH_RISK_PORTS.keys())
 MAX_PORTS_PER_SCAN = 1024
 
+# Scan requests run synchronously on a server worker thread (a 1024-port scan
+# can take over 10s), so cap how many run at once. Otherwise a few slow scans
+# would occupy every worker and starve the rest of the API, including login.
+MAX_CONCURRENT_SCANS = 2
+_scan_slots = threading.BoundedSemaphore(MAX_CONCURRENT_SCANS)
+
+
+def _scan_busy_response():
+    resp = jsonify({"error": "Too many scans in progress. Try again in a few seconds."})
+    resp.status_code = 429
+    resp.headers["Retry-After"] = "5"
+    return resp
+
 
 def _traffic_loop():
     """Samples bandwidth on a steady cadence. Kept free of slow network
@@ -170,7 +183,12 @@ def list_devices():
 @app.route("/api/devices/scan", methods=["POST"])
 @limiter.limit(config.SCAN_RATE_LIMIT)
 def rescan_devices():
-    found = devices.scan_devices()
+    if not _scan_slots.acquire(blocking=False):
+        return _scan_busy_response()
+    try:
+        found = devices.scan_devices()
+    finally:
+        _scan_slots.release()
     with _state_lock:
         _state["devices"] = found
         _state["devices_scanned_at"] = time.time()
@@ -204,7 +222,12 @@ def scan_ports_route():
     use_nmap = request.args.get("engine") == "nmap"
     # Scan the IP we validated, not the hostname, so a second DNS lookup
     # can't return a different (public) address (DNS rebinding).
-    result = ports.scan_ports(resolved_or_reason, ports=port_list, use_nmap=use_nmap)
+    if not _scan_slots.acquire(blocking=False):
+        return _scan_busy_response()
+    try:
+        result = ports.scan_ports(resolved_or_reason, ports=port_list, use_nmap=use_nmap)
+    finally:
+        _scan_slots.release()
     result["host"] = host
     result["new_alerts"] = alerts.check_risky_ports(
         resolved_or_reason,
