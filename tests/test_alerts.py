@@ -210,7 +210,24 @@ def test_returning_device_can_leave_again(temp_db, monkeypatch):
     alerts.check_new_devices([here])
     assert len(alerts.check_departed_devices([here])) == 1
 
-    assert alerts.check_new_devices([here, flaky]) == []  # back: not "new"
+    back = alerts.check_new_devices([here, flaky])
+    assert [a["category"] for a in back] == ["device_returned"]  # back, not "new"
+    assert alerts.check_new_devices([here, flaky]) == []  # and only reported once
     _age_device("BB:BB", alerts.DEVICE_OFFLINE_AFTER + 10)
     alerts.check_new_devices([here])
     assert len(alerts.check_departed_devices([here])) == 1
+
+
+def test_device_came_back_alert_message(temp_db, monkeypatch):
+    monkeypatch.setattr(alerts, "_departures_baselined", True)
+    here, flaky = _dev("AA:AA"), _dev("BB:BB", ip="10.0.0.10", hostname="tv")
+    alerts.check_new_devices([here, flaky])
+    _age_device("BB:BB", alerts.DEVICE_OFFLINE_AFTER + 10)
+    alerts.check_new_devices([here])
+    alerts.check_departed_devices([here])
+
+    back = alerts.check_new_devices([here, flaky])
+
+    assert len(back) == 1
+    assert "came back" in back[0]["message"] and "10.0.0.10" in back[0]["message"]
+    assert back[0]["severity"] == "info"

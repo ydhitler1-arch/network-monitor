@@ -26,7 +26,7 @@ backend, React (Vite) frontend.
   - high-risk open ports (Telnet, SMB, RDP, unauthenticated Redis/Mongo, etc.)
   - unusual traffic spikes (upload/download rate far above recent baseline)
   - new devices joining the network (diffed against previously seen MACs)
-  - devices leaving the network (missing from scans for 5 minutes)
+  - devices leaving the network (missing from scans for 5 minutes) and coming back
 
 Traffic samples and alerts are persisted to a local SQLite database
 (`data/scan_history.db`) so history survives a restart.

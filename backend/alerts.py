@@ -1,4 +1,4 @@
-"""Rule engine: risky ports, traffic spikes, new and departed devices.
+"""Rule engine: risky ports, traffic spikes, new, departed and returning devices.
 
 THIS IS THE FUNCTION THAT CREATES ALERT RECORDS.
 
@@ -109,12 +109,16 @@ def check_new_devices(devices: list) -> list:
     known = db.get_known_devices()
     now = time.time()
     for dev in devices:
-        is_new = dev["mac"] not in known
+        prior = known.get(dev["mac"])
         db.upsert_known_device(dev["mac"], dev["ip"], dev.get("hostname", ""), "", now)
-        if is_new:
-            label = f" - {dev['hostname']}" if dev.get("hostname") else ""
+        label = f" - {dev['hostname']}" if dev.get("hostname") else ""
+        if prior is None:
             alerts_out.append(_emit("info", "new_device",
                 f"New device joined the network: {dev['ip']} ({dev['mac']}){label}"))
+        elif not prior.get("online", 1):
+            # Previously reported as left by check_departed_devices().
+            alerts_out.append(_emit("info", "device_returned",
+                f"Device came back: {dev['ip']} ({dev['mac']}){label}"))
     return alerts_out
 
 
