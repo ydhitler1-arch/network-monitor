@@ -1,6 +1,7 @@
 """Flask API server: routes + background monitoring loop."""
 
 import hashlib
+import logging
 import os
 import threading
 import time
@@ -11,6 +12,8 @@ from flask_cors import CORS
 
 from backend import alerts, auth, config, db, devices, ports, security, traffic
 from backend.limiter import limiter
+
+log = logging.getLogger(__name__)
 
 FRONTEND_DIST = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "dist"
@@ -78,10 +81,10 @@ def _monitor_loop():
                         if result:
                             alerts.check_risky_ports(dev["ip"], result)
                     except Exception:
-                        pass
+                        log.exception("Port scan failed for %s", dev.get("ip"))
                 last_device_scan = now
         except Exception:
-            pass
+            log.exception("Monitor loop iteration failed")
         time.sleep(TRAFFIC_INTERVAL)
 
 
@@ -190,8 +193,11 @@ def scan_ports_route():
             return jsonify({"error": "ports must be between 1 and 65535"}), 400
 
     use_nmap = request.args.get("engine") == "nmap"
-    result = ports.scan_ports(host, ports=port_list, use_nmap=use_nmap)
-    result["new_alerts"] = alerts.check_risky_ports(host, result["open_ports"])
+    # Scan the IP we validated, not the hostname, so a second DNS lookup
+    # can't return a different (public) address (DNS rebinding).
+    result = ports.scan_ports(resolved_or_reason, ports=port_list, use_nmap=use_nmap)
+    result["host"] = host
+    result["new_alerts"] = alerts.check_risky_ports(resolved_or_reason, result["open_ports"])
     return jsonify(result)
 
 

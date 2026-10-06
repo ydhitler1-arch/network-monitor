@@ -50,6 +50,9 @@ HIGH_RISK_PORTS: dict = {p: info[2] for p, info in PORT_INFO.items()}
 
 # Traffic-spike cooldown per direction — 5 min between repeated alerts
 SPIKE_COOLDOWN = 300
+SPIKE_WINDOW = 30
+SPIKE_MULTIPLIER = 4
+SPIKE_MIN_RATE = 50 * 1024
 _spike_seen: dict = {}
 
 
@@ -73,10 +76,6 @@ def _emit(severity: str, category: str, message: str) -> dict:
 # ── Public rule functions ─────────────────────────────────────────────────────
 
 def check_traffic_spike(history: list) -> list:
-    SPIKE_WINDOW = 30
-    SPIKE_MULTIPLIER = 4
-    SPIKE_MIN_RATE = 50 * 1024
-
     alerts_out = []
     if len(history) < SPIKE_WINDOW + 1:
         return alerts_out
