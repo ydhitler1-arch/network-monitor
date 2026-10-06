@@ -2,12 +2,14 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import TrafficChart from "./components/TrafficChart.jsx";
 import DeviceList from "./components/DeviceList.jsx";
 import PortScanTable from "./components/PortScanTable.jsx";
+import FindingsPanel from "./components/FindingsPanel.jsx";
 import AlertsPanel from "./components/AlertsPanel.jsx";
 import Login from "./components/Login.jsx";
 import {
   getTrafficHistory,
   getDevices,
   getAlerts,
+  getFindings,
   getMeta,
   getAuthStatus,
   logout,
@@ -23,6 +25,7 @@ export default function App() {
   const [devices, setDevices] = useState([]);
   const [devicesScannedAt, setDevicesScannedAt] = useState(null);
   const [alerts, setAlerts] = useState([]);
+  const [findings, setFindings] = useState([]);
   const [meta, setMeta] = useState(null);
   const [error, setError] = useState("");
   const mounted = useRef(true);
@@ -65,18 +68,27 @@ export default function App() {
         .then((data) => mounted.current && setAlerts(data))
         .catch(handleError);
 
+    const pollFindings = () =>
+      getFindings(200)
+        .then((data) => mounted.current && setFindings(data))
+        .catch(handleError);
+
     // Fire all initial fetches in parallel — data appears as soon as each
     // individual request resolves instead of waiting for all three.
     Promise.all([
       pollTraffic(),
       pollDevices(),
       pollAlerts(),
+      pollFindings(),
       getMeta().then((d) => mounted.current && setMeta(d)).catch(() => {}),
     ]);
 
     const t1 = setInterval(pollTraffic, TRAFFIC_POLL_MS);
     const t2 = setInterval(pollDevices, DEVICES_POLL_MS);
-    const t3 = setInterval(pollAlerts, ALERTS_POLL_MS);
+    const t3 = setInterval(() => {
+      pollAlerts();
+      pollFindings();
+    }, ALERTS_POLL_MS);
 
     return () => {
       mounted.current = false;
@@ -93,6 +105,7 @@ export default function App() {
 
   const refreshAlerts = () => {
     getAlerts(100).then(setAlerts).catch(() => {});
+    getFindings(200).then(setFindings).catch(() => {});
   };
 
   const handleLogout = async () => {
@@ -103,6 +116,7 @@ export default function App() {
       setTrafficHistory([]);
       setDevices([]);
       setAlerts([]);
+      setFindings([]);
       setError("");
     }
   };
@@ -148,6 +162,7 @@ export default function App() {
           />
         </div>
         <div>
+          <FindingsPanel findings={findings} />
           <AlertsPanel alerts={alerts} />
         </div>
       </div>

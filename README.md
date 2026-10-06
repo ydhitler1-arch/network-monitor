@@ -75,6 +75,7 @@ network-monitor/
 │   │       ├── TrafficChart.jsx
 │   │       ├── DeviceList.jsx
 │   │       ├── PortScanTable.jsx
+│   │       ├── FindingsPanel.jsx
 │   │       └── AlertsPanel.jsx
 │   └── vite.config.js
 └── data/

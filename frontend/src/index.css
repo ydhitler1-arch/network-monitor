@@ -232,11 +232,18 @@ input[type="text"] {
   color: var(--red);
 }
 
+.badge.high {
+  background: rgba(240, 130, 63, 0.2);
+  color: #f08a3f;
+}
+
+.badge.medium,
 .badge.warning {
   background: rgba(240, 169, 63, 0.2);
   color: var(--amber);
 }
 
+.badge.low,
 .badge.info {
   background: rgba(77, 163, 255, 0.2);
   color: var(--accent);
@@ -266,4 +273,13 @@ input[type="text"] {
 .scroll-panel {
   max-height: 320px;
   overflow-y: auto;
+}
+
+.finding-closed {
+  opacity: 0.45;
+}
+
+.finding-tag {
+  color: var(--muted);
+  font-size: 0.75rem;
 }
