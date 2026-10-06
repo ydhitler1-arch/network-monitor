@@ -56,8 +56,9 @@ RISKY_PORT_LIST = list(alerts.HIGH_RISK_PORTS.keys())
 MAX_PORTS_PER_SCAN = 1024
 
 
-def _monitor_loop():
-    last_device_scan = 0
+def _traffic_loop():
+    """Samples bandwidth on a steady cadence. Kept free of slow network
+    scans so chart data never has gaps while a device/port scan runs."""
     last_persist = 0
     while True:
         try:
@@ -68,30 +69,39 @@ def _monitor_loop():
             if now - last_persist >= TRAFFIC_PERSIST_INTERVAL:
                 db.insert_traffic(sample)
                 last_persist = now
-
-            if now - last_device_scan >= DEVICE_SCAN_INTERVAL:
-                found = devices.scan_devices()
-                with _state_lock:
-                    _state["devices"] = found
-                    _state["devices_scanned_at"] = now
-                alerts.check_new_devices(found)
-                for dev in found:
-                    try:
-                        result = ports.socket_scan(dev["ip"], ports=RISKY_PORT_LIST, timeout=0.3)
-                        if result:
-                            alerts.check_risky_ports(dev["ip"], result)
-                    except Exception:
-                        log.exception("Port scan failed for %s", dev.get("ip"))
-                last_device_scan = now
         except Exception:
-            log.exception("Monitor loop iteration failed")
+            log.exception("Traffic loop iteration failed")
         time.sleep(TRAFFIC_INTERVAL)
+
+
+def _scan_loop():
+    """Device discovery + risky-port sweep. Can take many seconds per pass,
+    so it runs in its own thread, separate from traffic sampling."""
+    while True:
+        started = time.time()
+        try:
+            found = devices.scan_devices()
+            with _state_lock:
+                _state["devices"] = found
+                _state["devices_scanned_at"] = time.time()
+            alerts.check_new_devices(found)
+            for dev in found:
+                try:
+                    result = ports.socket_scan(dev["ip"], ports=RISKY_PORT_LIST, timeout=0.3)
+                    if result:
+                        alerts.check_risky_ports(dev["ip"], result)
+                except Exception:
+                    log.exception("Port scan failed for %s", dev.get("ip"))
+        except Exception:
+            log.exception("Scan loop iteration failed")
+        # Interval is measured from the start of a pass, but never spin.
+        time.sleep(max(1, DEVICE_SCAN_INTERVAL - (time.time() - started)))
 
 
 def start_background_monitor():
     db.init_db()
-    thread = threading.Thread(target=_monitor_loop, daemon=True)
-    thread.start()
+    for target in (_traffic_loop, _scan_loop):
+        threading.Thread(target=target, daemon=True).start()
 
 
 @app.route("/")
