@@ -72,6 +72,9 @@ def init_db():
             conn.execute("ALTER TABLE port_findings ADD COLUMN status TEXT NOT NULL DEFAULT 'open'")
         if "closed_at" not in cols:
             conn.execute("ALTER TABLE port_findings ADD COLUMN closed_at REAL")
+        dev_cols = {r["name"] for r in conn.execute("PRAGMA table_info(known_devices)")}
+        if "online" not in dev_cols:
+            conn.execute("ALTER TABLE known_devices ADD COLUMN online INTEGER NOT NULL DEFAULT 1")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_traffic_id ON traffic_history(id DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_alerts_id   ON alerts(id DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_findings_sev ON port_findings(severity, last_seen DESC)")
@@ -221,7 +224,7 @@ def upsert_known_device(mac, ip, hostname, vendor, now):
         ).fetchone()
         if existing:
             conn.execute(
-                "UPDATE known_devices SET ip=?,hostname=?,vendor=?,last_seen=? WHERE mac=?",
+                "UPDATE known_devices SET ip=?,hostname=?,vendor=?,last_seen=?,online=1 WHERE mac=?",
                 (ip, hostname, vendor, now, mac),
             )
         else:
@@ -232,6 +235,24 @@ def upsert_known_device(mac, ip, hostname, vendor, now):
             )
         conn.commit()
         return existing is None
+
+
+def mark_stale_devices_offline(cutoff: float) -> list:
+    """Flip online devices not seen since `cutoff` to offline and return them
+    (as dicts, with their last known ip/hostname)."""
+    with _lock:
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT * FROM known_devices WHERE online=1 AND last_seen < ?", (cutoff,)
+        ).fetchall()
+        if rows:
+            marks = ",".join("?" * len(rows))
+            conn.execute(
+                f"UPDATE known_devices SET online=0 WHERE mac IN ({marks})",
+                [r["mac"] for r in rows],
+            )
+            conn.commit()
+        return [dict(r) for r in rows]
 
 
 def get_known_devices():

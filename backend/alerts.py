@@ -1,4 +1,4 @@
-"""Rule engine: risky ports, traffic spikes, new devices.
+"""Rule engine: risky ports, traffic spikes, new and departed devices.
 
 THIS IS THE FUNCTION THAT CREATES ALERT RECORDS.
 
@@ -55,6 +55,12 @@ SPIKE_MULTIPLIER = 4
 SPIKE_MIN_RATE = 50 * 1024
 _spike_seen: dict = {}
 
+# A device counts as "left" once it has been missing from scans this long.
+# ARP/ping discovery is lossy (sleeping phones, dropped replies), so this must
+# span several 30s scan passes to avoid flapping alerts.
+DEVICE_OFFLINE_AFTER = 300
+_departures_baselined = False
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -109,6 +115,37 @@ def check_new_devices(devices: list) -> list:
             label = f" - {dev['hostname']}" if dev.get("hostname") else ""
             alerts_out.append(_emit("info", "new_device",
                 f"New device joined the network: {dev['ip']} ({dev['mac']}){label}"))
+    return alerts_out
+
+
+def check_departed_devices(found: list) -> list:
+    """Alert once for each known device that has been absent from scans for
+    DEVICE_OFFLINE_AFTER seconds. It is marked offline so it isn't re-reported,
+    and goes back online (silently) the next time a scan sees it.
+
+    Call after check_new_devices(), which refreshes last_seen for devices
+    that are present.
+    """
+    global _departures_baselined
+    # A scan that found nothing means the network/scanner is down, not that
+    # every device left at once.
+    if not found:
+        return []
+
+    now = time.time()
+    departed = db.mark_stale_devices_offline(now - DEVICE_OFFLINE_AFTER)
+
+    # First pass after startup: devices already stale from before we started
+    # (e.g. the app was off overnight) are marked offline without alerting.
+    if not _departures_baselined:
+        _departures_baselined = True
+        return []
+
+    alerts_out = []
+    for dev in departed:
+        label = f" - {dev['hostname']}" if dev.get("hostname") else ""
+        alerts_out.append(_emit("info", "device_left",
+            f"Device left the network: {dev['ip']} ({dev['mac']}){label}"))
     return alerts_out
 
 

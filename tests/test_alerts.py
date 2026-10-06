@@ -145,3 +145,72 @@ def test_old_rows_pruned_in_batches(temp_db, monkeypatch):
     add(10)                      # next prune cycle starts: trims to newest 5, then keeps this one
     rows = db.get_alerts(100)
     assert len(rows) <= 6 and rows[0]["message"] == "10"
+
+
+def _dev(mac, ip="10.0.0.9", hostname="phone"):
+    return {"ip": ip, "mac": mac, "hostname": hostname}
+
+
+def _age_device(mac, seconds):
+    import time
+
+    db.get_connection().execute(
+        "UPDATE known_devices SET last_seen=? WHERE mac=?", (time.time() - seconds, mac)
+    )
+
+
+def test_device_left_alert_after_grace_period(temp_db, monkeypatch):
+    monkeypatch.setattr(alerts, "_departures_baselined", True)
+    here, gone = _dev("AA:AA"), _dev("BB:BB", ip="10.0.0.10", hostname="")
+    alerts.check_new_devices([here, gone])
+    _age_device("BB:BB", alerts.DEVICE_OFFLINE_AFTER + 10)
+
+    alerts.check_new_devices([here])
+    found = alerts.check_departed_devices([here])
+
+    assert len(found) == 1
+    assert found[0]["category"] == "device_left" and "10.0.0.10" in found[0]["message"]
+    assert alerts.check_departed_devices([here]) == []  # reported only once
+
+
+def test_no_departure_within_grace_period(temp_db, monkeypatch):
+    monkeypatch.setattr(alerts, "_departures_baselined", True)
+    here, gone = _dev("AA:AA"), _dev("BB:BB")
+    alerts.check_new_devices([here, gone])
+    _age_device("BB:BB", 60)
+
+    alerts.check_new_devices([here])
+    assert alerts.check_departed_devices([here]) == []
+
+
+def test_empty_scan_does_not_report_everyone_gone(temp_db, monkeypatch):
+    monkeypatch.setattr(alerts, "_departures_baselined", True)
+    alerts.check_new_devices([_dev("AA:AA")])
+    _age_device("AA:AA", alerts.DEVICE_OFFLINE_AFTER + 10)
+
+    assert alerts.check_departed_devices([]) == []
+
+
+def test_first_pass_after_startup_is_silent(temp_db, monkeypatch):
+    monkeypatch.setattr(alerts, "_departures_baselined", False)
+    here, stale = _dev("AA:AA"), _dev("BB:BB")
+    alerts.check_new_devices([here, stale])
+    _age_device("BB:BB", 86400)  # app was off for a day
+
+    alerts.check_new_devices([here])
+    assert alerts.check_departed_devices([here]) == []
+    assert alerts._departures_baselined is True
+
+
+def test_returning_device_can_leave_again(temp_db, monkeypatch):
+    monkeypatch.setattr(alerts, "_departures_baselined", True)
+    here, flaky = _dev("AA:AA"), _dev("BB:BB")
+    alerts.check_new_devices([here, flaky])
+    _age_device("BB:BB", alerts.DEVICE_OFFLINE_AFTER + 10)
+    alerts.check_new_devices([here])
+    assert len(alerts.check_departed_devices([here])) == 1
+
+    assert alerts.check_new_devices([here, flaky]) == []  # back: not "new"
+    _age_device("BB:BB", alerts.DEVICE_OFFLINE_AFTER + 10)
+    alerts.check_new_devices([here])
+    assert len(alerts.check_departed_devices([here])) == 1

@@ -112,6 +112,7 @@ def _scan_loop():
                 _state["devices"] = found
                 _state["devices_scanned_at"] = time.time()
             alerts.check_new_devices(found)
+            alerts.check_departed_devices(found)
             for dev in found:
                 try:
                     result = ports.socket_scan(dev["ip"], ports=RISKY_PORT_LIST, timeout=0.3)
@@ -198,7 +199,7 @@ def rescan_devices():
     with _state_lock:
         _state["devices"] = found
         _state["devices_scanned_at"] = time.time()
-    new_alerts = alerts.check_new_devices(found)
+    new_alerts = alerts.check_new_devices(found) + alerts.check_departed_devices(found)
     return jsonify({"devices": found, "new_alerts": new_alerts})
 
 
