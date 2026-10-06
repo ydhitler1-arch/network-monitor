@@ -6,6 +6,7 @@ Discovery tiers, best-effort in order:
    (`arp -a` on Windows, `arp -n` on Linux/macOS). Needs no extra privileges.
 """
 
+import concurrent.futures
 import ipaddress
 import platform
 import re
@@ -40,12 +41,32 @@ def get_local_networks():
     return networks
 
 
+HOSTNAME_TIMEOUT = 0.5
+
+
 def _resolve_hostname(ip):
     try:
-        socket.setdefaulttimeout(0.5)
         return socket.gethostbyaddr(ip)[0]
     except Exception:
         return ""
+
+
+def _resolve_hostnames(ips):
+    """Reverse-resolve IPs in parallel, giving up on each after HOSTNAME_TIMEOUT.
+
+    gethostbyaddr has no timeout of its own, and socket.setdefaulttimeout would
+    change it process-wide, so the timeout is enforced on the futures instead.
+    """
+    if not ips:
+        return {}
+    # Not a context manager: exiting it would wait on any lookup that hung.
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(ips)))
+    try:
+        futures = {ip: executor.submit(_resolve_hostname, ip) for ip in ips}
+        concurrent.futures.wait(futures.values(), timeout=HOSTNAME_TIMEOUT)
+        return {ip: f.result() if f.done() else "" for ip, f in futures.items()}
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _scapy_scan(network, timeout=2):
@@ -117,13 +138,14 @@ def scan_devices():
             found.setdefault(d["mac"], d)
 
     now = time.time()
+    hostnames = _resolve_hostnames([d["ip"] for d in found.values()])
     devices = []
     for mac, d in found.items():
         devices.append(
             {
                 "ip": d["ip"],
                 "mac": mac,
-                "hostname": _resolve_hostname(d["ip"]),
+                "hostname": hostnames.get(d["ip"], ""),
                 "last_seen": now,
             }
         )
